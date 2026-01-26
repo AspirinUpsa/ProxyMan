@@ -12,3 +12,12 @@ TARGET = ProxyMan
 win32 {
     LIBS += -lwininet
 }
+
+# Иконка приложения
+win32 {
+        RC_FILE += icon.rc
+        OTHER_FILES += icon.rc
+}
+
+RESOURCES += \
+    resources.qrc

@@ -28,11 +28,65 @@
 #include <QGroupBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QSharedMemory>
+#include <QSystemSemaphore>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <wininet.h>  // Для работы с системными настройками прокси Windows
 #endif
+
+//==============================================================================
+// Класс для проверки единственного экземпляра приложения
+//==============================================================================
+class SingleInstanceGuard {
+public:
+    SingleInstanceGuard(const QString &key) : key(key) {
+        // Создаём семафор для синхронизации между процессами
+        semaphore = new QSystemSemaphore(key + "_semaphore", 1);
+        semaphore->acquire();
+
+#ifndef Q_OS_WIN
+        // В Unix-системах разделяемая память может оставаться после краша
+        // Пытаемся присоединиться к существующей памяти
+        QSharedMemory fix(key);
+        fix.attach();
+#endif
+
+        // Создаём разделяемую память
+        sharedMemory = new QSharedMemory(key);
+
+        // Пытаемся создать блок разделяемой памяти
+        if (!sharedMemory->create(1)) {
+            // Если не удалось создать - значит приложение уже запущено
+            isAnotherInstanceRunning = true;
+        } else {
+            isAnotherInstanceRunning = false;
+        }
+
+        semaphore->release();
+    }
+
+    ~SingleInstanceGuard() {
+        if (sharedMemory) {
+            sharedMemory->detach();
+            delete sharedMemory;
+        }
+        if (semaphore) {
+            delete semaphore;
+        }
+    }
+
+    bool isAnotherRunning() const {
+        return isAnotherInstanceRunning;
+    }
+
+private:
+    QString key;
+    QSharedMemory *sharedMemory;
+    QSystemSemaphore *semaphore;
+    bool isAnotherInstanceRunning;
+};
 
 //==============================================================================
 // Класс для управления автозагрузкой приложения в Windows
@@ -596,7 +650,17 @@ private slots:
             "<p align='center'><b>© 2026 POWer, Samara</b><br>"
             "Все права защищены</p>"
         );
-        aboutBox.setIcon(QMessageBox::Information);
+
+        // Загружаем и устанавливаем иконку приложения
+        QPixmap iconPixmap(":/ProxyMan.ico");
+        if (!iconPixmap.isNull()) {
+            // Масштабируем иконку до подходящего размера (64x64)
+            aboutBox.setIconPixmap(iconPixmap.scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            // Если файл не найден, используем стандартную иконку
+            aboutBox.setIcon(QMessageBox::Information);
+        }
+
         aboutBox.setStandardButtons(QMessageBox::Ok);
         aboutBox.exec();
     }
@@ -733,6 +797,23 @@ private:
 //==============================================================================
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+
+    //--------------------------------------------------------------------------
+    // Проверка на единственный экземпляр приложения
+    //--------------------------------------------------------------------------
+    SingleInstanceGuard instanceGuard("ProxyMan_SingleInstance_A7F3E9B2");
+
+    if (instanceGuard.isAnotherRunning()) {
+        QMessageBox::warning(
+            nullptr,
+            "Приложение уже запущено",
+            "Прокси Менеджер уже запущен!\n\n"
+            "Проверьте системный трей (область уведомлений).\n"
+            "Для выхода из работающего приложения используйте ПКМ → Выход.\n\n"
+            "© 2026 POWer, Samara"
+        );
+        return 0;  // Выходим, не запуская второй экземпляр
+    }
 
     // Проверяем доступность системного трея
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
